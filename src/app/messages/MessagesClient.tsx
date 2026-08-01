@@ -2,19 +2,56 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useState } from 'react'
 import type { Profile } from '@/lib/types'
-import { getInitials, timeAgo } from '@/lib/utils'
+import { getInitials } from '@/lib/utils'
 import { useConversations } from '@/hooks/use-conversations'
-import { MessageSquare, Plus, ChevronRight, Loader2 } from 'lucide-react'
+import { hasKeyBackup } from '@/lib/crypto/identity'
+import { loadPrivateKey } from '@/lib/crypto/key-storage'
+import { MessageSquare, Plus, ChevronRight, Loader2, X } from 'lucide-react'
 import NewConversationModal from '@/components/NewConversationModal'
+import KeyBackupModal from '@/components/KeyBackupModal'
 
 export default function MessagesClient({ profile }: { profile: Profile }) {
-  const supabase = createClient()
   const router = useRouter()
   const { conversations, loading } = useConversations(profile.id)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [backupState, setBackupState] = useState<'checking' | 'none' | 'restore_needed' | 'ok'>('checking')
+  const [showBackupModal, setShowBackupModal] = useState(false)
+  const [backupModalMode, setBackupModalMode] = useState<'create' | 'restore'>('create')
+  const [backupBannerHidden, setBackupBannerHidden] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function check() {
+      try {
+        const [hasBackup, hasLocal] = await Promise.all([
+          hasKeyBackup(profile.id),
+          loadPrivateKey(profile.id),
+        ])
+        if (cancelled) return
+        if (hasLocal && !hasBackup) setBackupState('none')
+        else if (!hasLocal && hasBackup) setBackupState('restore_needed')
+        else setBackupState('ok')
+      } catch {
+        if (!cancelled) setBackupState('ok')
+      }
+    }
+
+    check()
+    return () => { cancelled = true }
+  }, [profile.id])
+
+  const refreshBackupState = async () => {
+    const [hasBackup, hasLocal] = await Promise.all([
+      hasKeyBackup(profile.id),
+      loadPrivateKey(profile.id),
+    ])
+    if (hasLocal && hasBackup) setBackupState('ok')
+    else if (!hasLocal && hasBackup) setBackupState('restore_needed')
+    else if (hasLocal && !hasBackup) setBackupState('none')
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
@@ -28,6 +65,47 @@ export default function MessagesClient({ profile }: { profile: Profile }) {
           New message
         </button>
       </div>
+
+      {!backupBannerHidden && backupState === 'none' && (
+        <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800 flex items-center gap-2">
+          <span className="flex-1">
+            Your encryption key isn&apos;t backed up. Set a passphrase to recover your messages on a new device.
+          </span>
+          <button
+            onClick={() => { setBackupModalMode('create'); setShowBackupModal(true) }}
+            className="shrink-0 font-semibold underline"
+          >
+            Set up
+          </button>
+          <button
+            onClick={() => setBackupBannerHidden(true)}
+            className="shrink-0 text-amber-500 hover:text-amber-700 font-bold"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+      {!backupBannerHidden && backupState === 'restore_needed' && (
+        <div className="mb-4 p-3 rounded-xl bg-accent-soft border border-accent/30 text-sm text-primary flex items-center gap-2">
+          <span className="flex-1">
+            You&apos;re on a new device. Restore your encryption key to read past messages.
+          </span>
+          <button
+            onClick={() => { setBackupModalMode('restore'); setShowBackupModal(true) }}
+            className="shrink-0 font-semibold text-accent underline"
+          >
+            Restore key
+          </button>
+          <button
+            onClick={() => setBackupBannerHidden(true)}
+            className="shrink-0 text-secondary hover:text-primary font-bold"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
@@ -82,6 +160,18 @@ export default function MessagesClient({ profile }: { profile: Profile }) {
           onCreated={(convId) => {
             setShowNewModal(false)
             router.push(`/messages/${convId}`)
+          }}
+        />
+      )}
+
+      {showBackupModal && (
+        <KeyBackupModal
+          userId={profile.id}
+          mode={backupModalMode}
+          onClose={() => setShowBackupModal(false)}
+          onSuccess={() => {
+            setShowBackupModal(false)
+            refreshBackupState()
           }}
         />
       )}

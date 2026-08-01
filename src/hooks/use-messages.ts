@@ -10,26 +10,52 @@ interface DecryptedMessage extends MsgType {
   decrypted: string
 }
 
+interface E2eeKeys {
+  myPriv: CryptoKey
+  myPub: CryptoKey
+  theirPub: CryptoKey
+}
+
 export function useMessages(
   conversationId: string,
   userId: string,
-  otherUser: Profile,
+  otherUser: Profile | null,
 ) {
   const supabase = createClient()
   const [messages, setMessages] = useState<DecryptedMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [e2eeReady, setE2eeReady] = useState(false)
+  const [keyStatus, setKeyStatus] = useState<'checking' | 'ready' | 'restore_needed' | 'key_lost'>('checking')
   const [error, setError] = useState<string | null>(null)
-  const keysReady = useRef(false)
+  const [attempt, setAttempt] = useState(0)
+  const keysRef = useRef<E2eeKeys | null>(null)
 
   // ── Setup E2EE keys ──
   useEffect(() => {
     let cancelled = false
+    const otherId = otherUser?.id
+    const otherName = otherUser?.full_name ?? otherUser?.username
 
     async function setup() {
       try {
-        await ensureIdentityKeyPair(userId)
+        if (!otherId) { setError('User not found'); return }
+
+        const status = await ensureIdentityKeyPair(userId)
+        if (cancelled) return
+
+        if (status === 'restore_needed') {
+          setKeyStatus('restore_needed')
+          setE2eeReady(false)
+          return
+        }
+        if (status === 'key_lost') {
+          setKeyStatus('key_lost')
+          setE2eeReady(false)
+          return
+        }
+
+        setKeyStatus('ready')
 
         const [myPriv, myPub] = await Promise.all([
           loadMyPrivateKey(userId),
@@ -41,16 +67,15 @@ export function useMessages(
         const { data: theirKeyRow } = await supabase
           .from('user_keys')
           .select('public_key')
-          .eq('user_id', otherUser.id)
+          .eq('user_id', otherId)
           .single()
 
-        if (!theirKeyRow) { setError(`${otherUser.full_name ?? otherUser.username} has not set up encryption yet`); return }
+        if (!theirKeyRow) { setError(`${otherName ?? 'This user'} has not set up encryption yet`); return }
 
         const theirPub = await importPublicKey(theirKeyRow.public_key)
 
         if (!cancelled) {
-          ;(window as unknown as Record<string, unknown>).__e2ee_keys__ = { myPriv, myPub, theirPub }
-          keysReady.current = true
+          keysRef.current = { myPriv, myPub, theirPub }
           setE2eeReady(true)
         }
       } catch {
@@ -60,55 +85,56 @@ export function useMessages(
 
     setup()
     return () => { cancelled = true }
-  }, [userId, otherUser.id, otherUser.full_name, otherUser.username, supabase])
+  }, [userId, otherUser?.id, otherUser?.full_name, otherUser?.username, supabase, attempt])
 
   // ── Fetch message history ──
   useEffect(() => {
     if (!e2eeReady) return
-    let cancelled = false
 
     async function fetchMessages() {
       setLoading(true)
+      try {
+        const { data: msgs } = await supabase
+          .from('messages')
+          .select('*, sender:profiles(*)')
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: true })
 
-      const { data: msgs } = await supabase
-        .from('messages')
-        .select('*, sender:profiles(*)')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true })
+        if (!msgs) { setLoading(false); return }
 
-      if (!msgs || cancelled) { setLoading(false); return }
+        const keys = keysRef.current
+        if (!keys) { setLoading(false); return }
 
-      const keys = (window as unknown as Record<string, unknown>).__e2ee_keys__ as {
-        myPriv: CryptoKey; myPub: CryptoKey; theirPub: CryptoKey
+        const decrypted = await Promise.all(
+          msgs.map(async (msg) => {
+            if (msg.sender_id === userId) {
+              try {
+                const text = await decryptMessage(
+                  msg.ciphertext_self!,
+                  msg.iv_self!,
+                  keys.myPriv,
+                  keys.myPub,
+                )
+                return { ...msg, decrypted: text } as DecryptedMessage
+              } catch { return { ...msg, decrypted: '[Unable to decrypt]' } as DecryptedMessage }
+            } else {
+              try {
+                const text = await decryptMessage(
+                  msg.ciphertext,
+                  msg.iv,
+                  keys.myPriv,
+                  keys.theirPub,
+                )
+                return { ...msg, decrypted: text } as DecryptedMessage
+              } catch { return { ...msg, decrypted: '[Unable to decrypt]' } as DecryptedMessage }
+            }
+          }),
+        )
+
+        setMessages(decrypted); setLoading(false)
+      } catch {
+        setLoading(false)
       }
-
-      const decrypted = await Promise.all(
-        msgs.map(async (msg) => {
-          if (msg.sender_id === userId) {
-            try {
-              const text = await decryptMessage(
-                msg.ciphertext_self!,
-                msg.iv_self!,
-                keys.myPriv,
-                keys.myPub,
-              )
-              return { ...msg, decrypted: text } as DecryptedMessage
-            } catch { return { ...msg, decrypted: '[Unable to decrypt]' } as DecryptedMessage }
-          } else {
-            try {
-              const text = await decryptMessage(
-                msg.ciphertext,
-                msg.iv,
-                keys.myPriv,
-                keys.theirPub,
-              )
-              return { ...msg, decrypted: text } as DecryptedMessage
-            } catch { return { ...msg, decrypted: '[Unable to decrypt]' } as DecryptedMessage }
-          }
-        }),
-      )
-
-      if (!cancelled) { setMessages(decrypted); setLoading(false) }
     }
 
     fetchMessages()
@@ -118,9 +144,8 @@ export function useMessages(
   useEffect(() => {
     if (!e2eeReady) return
 
-    const keys = (window as unknown as Record<string, unknown>).__e2ee_keys__ as {
-      myPriv: CryptoKey; myPub: CryptoKey; theirPub: CryptoKey
-    }
+    const keys = keysRef.current
+    if (!keys) return
 
     const channel = supabase
       .channel(`messages:${conversationId}`)
@@ -168,9 +193,8 @@ export function useMessages(
   const sendMessage = useCallback(async (plaintext: string) => {
     if (!plaintext.trim() || sending || !e2eeReady) return
 
-    const keys = (window as unknown as Record<string, unknown>).__e2ee_keys__ as {
-      myPriv: CryptoKey; myPub: CryptoKey; theirPub: CryptoKey
-    }
+    const keys = keysRef.current
+    if (!keys) return
 
     setSending(true)
     try {
@@ -195,5 +219,7 @@ export function useMessages(
     setSending(false)
   }, [conversationId, userId, sending, e2eeReady, supabase])
 
-  return { messages, loading, sending, e2eeReady, error, sendMessage, setError }
+  const refreshKeys = useCallback(() => setAttempt((a) => a + 1), [])
+
+  return { messages, loading, sending, e2eeReady, keyStatus, error, sendMessage, setError, refreshKeys }
 }

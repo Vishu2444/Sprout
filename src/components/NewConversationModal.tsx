@@ -21,26 +21,36 @@ export default function NewConversationModal({
   const [searching, setSearching] = useState(false)
   const [creating, setCreating] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const latestQueryRef = useRef('')
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
   useEffect(() => {
-    if (query.length < 2) { setResults([]); return }
-
+    const currentQuery = query
     const timer = setTimeout(async () => {
+      if (currentQuery.length < 2) { setSearching(false); setResults([]); return }
+
       setSearching(true)
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .neq('id', currentUserId)
-        .or(`username.ilike.%${query}%,full_name.ilike.%${query}%`)
-        .limit(10)
-      if (data) setResults(data)
-      setSearching(false)
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('*')
+          .neq('id', currentUserId)
+          .or(`username.ilike.%${currentQuery}%,full_name.ilike.%${currentQuery}%`)
+          .limit(10)
+        if (latestQueryRef.current !== currentQuery) return
+        if (data) setResults(data)
+      } catch {
+        if (latestQueryRef.current !== currentQuery) return
+        setResults([])
+      } finally {
+        if (latestQueryRef.current === currentQuery) setSearching(false)
+      }
     }, 300)
 
+    latestQueryRef.current = currentQuery
     return () => clearTimeout(timer)
   }, [query, supabase, currentUserId])
 

@@ -48,13 +48,6 @@ export default function Navbar({ initialProfile }: { initialProfile: Profile | n
     navLinks.push({ href: '/messages', label: 'Messages' })
   }
 
-  const linkClass = (href: string, base: string) => {
-    const active = isActive(href)
-    return base + ' ' + (active
-      ? 'bg-accent-soft text-accent'
-      : 'text-secondary hover:text-primary hover:bg-surface-alt')
-  }
-
   const mobileLinkClass = (href: string) => {
     const active = isActive(href)
     return 'block px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200 ' + (active

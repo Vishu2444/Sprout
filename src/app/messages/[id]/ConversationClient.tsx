@@ -5,6 +5,8 @@ import Link from 'next/link'
 import type { Profile } from '@/lib/types'
 import { getInitials, timeAgo } from '@/lib/utils'
 import { useMessages } from '@/hooks/use-messages'
+import { resetIdentityKeyPair } from '@/lib/crypto/identity'
+import KeyBackupModal from '@/components/KeyBackupModal'
 import { ArrowLeft, Send, Loader2, Lock } from 'lucide-react'
 
 export default function ConversationClient({
@@ -16,18 +18,37 @@ export default function ConversationClient({
   profile: Profile
   otherProfile: Profile | null
 }) {
-  const { messages, loading, sending, e2eeReady, error, sendMessage, setError } = useMessages(
+  const { messages, loading, sending, e2eeReady, keyStatus, error, sendMessage, setError, refreshKeys } = useMessages(
     conversationId,
     profile.id,
-    otherProfile!,
+    otherProfile,
   )
   const [input, setInput] = useState('')
+  const [showRestore, setShowRestore] = useState(false)
+  const [resetConfirm, setResetConfirm] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (keyStatus === 'restore_needed') setShowRestore(true)
+  }, [keyStatus])
+
+  const handleReset = async () => {
+    if (resetting) return
+    setResetting(true)
+    try {
+      await resetIdentityKeyPair(profile.id)
+      setResetConfirm(false)
+      refreshKeys()
+    } finally {
+      setResetting(false)
+    }
+  }
 
   const handleSend = () => {
     const text = input.trim()
@@ -111,7 +132,56 @@ export default function ConversationClient({
 
       {/* Input */}
       <div className="mt-4 pt-4 border-t border-border">
-        {e2eeReady ? (
+        {keyStatus === 'restore_needed' ? (
+          <div className="text-center py-6">
+            <div className="w-12 h-12 rounded-2xl bg-accent-soft flex items-center justify-center mx-auto mb-3">
+              <Lock className="w-5 h-5 text-accent" />
+            </div>
+            <p className="text-sm text-secondary mb-4">
+              This conversation is encrypted with a key from another device.
+              Restore your key to read and send messages.
+            </p>
+            <button
+              onClick={() => setShowRestore(true)}
+              className="inline-flex items-center gap-2 bg-accent text-accent-on rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-accent-hover transition-all duration-200"
+            >
+              Restore encryption key
+            </button>
+          </div>
+        ) : keyStatus === 'key_lost' ? (
+          <div className="text-center py-6">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center mx-auto mb-3">
+              <Lock className="w-5 h-5 text-red-600 dark:text-red-400" />
+            </div>
+            <p className="text-sm text-secondary mb-2">
+              Your encryption key is stored on another device with no backup passphrase.
+              Sign in on that device and set up a backup, or reset your key.
+            </p>
+            <p className="text-xs text-red-600 dark:text-red-400 mb-4">
+              Resetting your key makes old messages permanently unreadable on every device.
+            </p>
+            <button
+              onClick={() => setResetConfirm((v) => !v)}
+              className="inline-flex items-center gap-2 bg-red-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-red-700 transition-all duration-200"
+            >
+              {resetting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : resetConfirm ? (
+                'I understand — reset key'
+              ) : (
+                'Reset encryption key'
+              )}
+            </button>
+            {resetConfirm && !resetting && (
+              <button
+                onClick={handleReset}
+                className="block mx-auto mt-2 text-xs text-red-500 underline"
+              >
+                Confirm reset
+              </button>
+            )}
+          </div>
+        ) : e2eeReady ? (
           <div className="flex items-center gap-2 bg-surface rounded-xl border border-border focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent transition-all duration-200">
             <input
               ref={inputRef}
@@ -136,11 +206,23 @@ export default function ConversationClient({
           </div>
         ) : (
           <div className="text-center py-6">
-<Loader2 className="w-5 h-5 text-accent animate-spin mx-auto mb-2" />
-          <p className="text-sm text-secondary">Setting up end-to-end encryption...</p>
+            <Loader2 className="w-5 h-5 text-accent animate-spin mx-auto mb-2" />
+            <p className="text-sm text-secondary">Setting up end-to-end encryption...</p>
           </div>
         )}
       </div>
+
+      {showRestore && keyStatus === 'restore_needed' && (
+        <KeyBackupModal
+          userId={profile.id}
+          mode="restore"
+          onClose={() => setShowRestore(false)}
+          onSuccess={() => {
+            setShowRestore(false)
+            refreshKeys()
+          }}
+        />
+      )}
     </div>
   )
 }
