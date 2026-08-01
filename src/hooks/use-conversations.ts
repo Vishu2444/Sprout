@@ -8,38 +8,51 @@ interface EnrichedConversation extends Conversation {
   otherProfile: Profile
 }
 
+async function loadConversations(userId: string): Promise<EnrichedConversation[] | null> {
+  const supabase = createClient()
+
+  const { data: convos } = await supabase
+    .from('conversations')
+    .select('*')
+    .or(`user_a.eq.${userId},user_b.eq.${userId}`)
+    .order('created_at', { ascending: false })
+
+  if (!convos) return null
+
+  const enriched: EnrichedConversation[] = await Promise.all(
+    convos.map(async (conv) => {
+      const otherId = conv.user_a === userId ? conv.user_b : conv.user_a
+      const { data: otherProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', otherId)
+        .single()
+      return { ...conv, otherProfile: otherProfile! } as EnrichedConversation
+    }),
+  )
+
+  return enriched
+}
+
 export function useConversations(userId: string) {
   const supabase = createClient()
   const [conversations, setConversations] = useState<EnrichedConversation[]>([])
   const [loading, setLoading] = useState(true)
 
-  const fetch = useCallback(async () => {
-    setLoading(true)
-    const { data: convos } = await supabase
-      .from('conversations')
-      .select('*')
-      .or(`user_a.eq.${userId},user_b.eq.${userId}`)
-      .order('created_at', { ascending: false })
+  useEffect(() => {
+    let cancelled = false
 
-    if (!convos) { setLoading(false); return }
+    loadConversations(userId).then((enriched) => {
+      if (cancelled) return
+      if (!enriched) { setLoading(false); return }
+      setConversations(enriched)
+      setLoading(false)
+    }).catch(() => {
+      if (!cancelled) setLoading(false)
+    })
 
-    const enriched: EnrichedConversation[] = await Promise.all(
-      convos.map(async (conv) => {
-        const otherId = conv.user_a === userId ? conv.user_b : conv.user_a
-        const { data: otherProfile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', otherId)
-          .single()
-        return { ...conv, otherProfile: otherProfile! } as EnrichedConversation
-      }),
-    )
-
-    setConversations(enriched)
-    setLoading(false)
-  }, [userId, supabase])
-
-  useEffect(() => { fetch() }, [fetch])
+    return () => { cancelled = true }
+  }, [userId])
 
   const createConversation = useCallback(async (otherUserId: string): Promise<string | null> => {
     const userA = userId < otherUserId ? userId : otherUserId
@@ -62,9 +75,11 @@ export function useConversations(userId: string) {
 
     if (error || !conv) return null
 
-    await fetch()
+    const enriched = await loadConversations(userId)
+    if (enriched) setConversations(enriched)
+
     return conv.id
-  }, [userId, supabase, fetch])
+  }, [userId, supabase])
 
   return { conversations, loading, createConversation }
 }

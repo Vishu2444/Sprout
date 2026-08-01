@@ -48,9 +48,8 @@ export default async function ProjectsPage({
     query = query.eq('status', params.status)
   }
 
-  const sortField = params.sort === 'oldest' ? 'created_at' : 'created_at'
   const sortOrder = params.sort === 'oldest' ? { ascending: true } as const : { ascending: false } as const
-  query = query.order(sortField, sortOrder)
+  query = query.order('created_at', sortOrder)
 
   const { data: projects } = await query
 

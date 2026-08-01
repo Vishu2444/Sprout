@@ -44,13 +44,10 @@ export default async function ManagePage({ params }: { params: Promise<{ id: str
     .eq('project_id', id)
     .order('created_at', { ascending: false })
 
-  const { data: allSkills } = await supabase.from('skills').select('*').order('name')
-
   return (
     <ManageProject
       project={project}
       applications={applications || []}
-      allSkills={allSkills || []}
       currentUserId={user.id}
     />
   )

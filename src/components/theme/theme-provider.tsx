@@ -21,9 +21,11 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
     const stored = localStorage.getItem('sprout-theme') as Theme | null
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     const resolved = stored || (systemDark ? 'dark' : 'light')
-    setTheme(resolved)
     document.documentElement.classList.toggle('dark', resolved === 'dark')
-    setMounted(true)
+    queueMicrotask(() => {
+      setTheme(resolved)
+      setMounted(true)
+    })
   }, [])
 
   useEffect(() => {

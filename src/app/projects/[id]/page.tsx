@@ -39,8 +39,6 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: allSkills } = await supabase.from('skills').select('*').order('name')
-
   const isOwner = user?.id === project.owner_id
 
   // Get applications for this project (if owner)
@@ -75,7 +73,6 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
       isMember={!!isMember}
       userApplication={userApplication}
       applications={applications}
-      allSkills={allSkills || []}
     />
   )
 }

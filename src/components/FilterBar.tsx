@@ -28,8 +28,6 @@ export default function FilterBar({ skills, currentParams }: FilterBarProps) {
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 
-  const categories = [...new Set(skills.map((s) => s.category).filter(Boolean))] as string[]
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3">

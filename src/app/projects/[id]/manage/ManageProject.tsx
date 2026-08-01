@@ -4,9 +4,10 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import type { Profile, Skill } from '@/lib/types'
-import { getStatusColor, timeAgo, getInitials } from '@/lib/utils'
-import { ArrowLeft, Check, X, UserMinus, Save, Edit3 } from 'lucide-react'
+import type { Profile } from '@/lib/types'
+import { timeAgo, getInitials } from '@/lib/utils'
+import { ArrowLeft, Check, X, UserMinus, Save, Edit3, Trash2 } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface ManageProps {
   project: {
@@ -40,11 +41,10 @@ interface ManageProps {
     applicant: Profile | null
     skill: { id: string; name: string } | null
   }[]
-  allSkills: Skill[]
   currentUserId: string
 }
 
-export default function ManageProject({ project, applications, allSkills, currentUserId }: ManageProps) {
+export default function ManageProject({ project, applications, currentUserId }: ManageProps) {
   const router = useRouter()
   const supabase = createClient()
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -54,6 +54,9 @@ export default function ManageProject({ project, applications, allSkills, curren
   const [editTagline, setEditTagline] = useState(project.tagline || '')
   const [editDescription, setEditDescription] = useState(project.description)
   const [editStatus, setEditStatus] = useState(project.status)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const handleApplicationAction = async (applicationId: string, applicantId: string, skillId: string, action: 'accepted' | 'rejected') => {
     setActionLoading(applicationId)
@@ -107,7 +110,7 @@ export default function ManageProject({ project, applications, allSkills, curren
   const handleRemoveMember = async (userId: string) => {
     if (userId === currentUserId) return
     setActionLoading(`remove-${userId}`)
-    const { error } = await supabase
+    await supabase
       .from('project_members')
       .delete()
       .eq('project_id', project.id)
@@ -136,6 +139,22 @@ export default function ManageProject({ project, applications, allSkills, curren
     router.refresh()
   }
 
+  const handleDelete = async () => {
+    if (deleting) return
+    setDeleting(true)
+    setDeleteError('')
+    const { error: deleteErr } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', project.id)
+    if (deleteErr) {
+      setDeleteError(deleteErr.message)
+      setDeleting(false)
+      return
+    }
+    router.push('/projects')
+  }
+
   const groupApplicationsBySkill = () => {
     const groups: Record<string, typeof applications> = {}
     for (const app of applications) {
@@ -160,12 +179,21 @@ export default function ManageProject({ project, applications, allSkills, curren
           <h1 className="text-heading">Manage Project</h1>
           <p className="text-sm text-secondary mt-1">{project.title}</p>
         </div>
-        <button
-          onClick={() => editing ? handleSaveProject() : setEditing(true)}
-          className="bg-accent text-accent-on rounded-xl px-4 py-2 text-sm font-semibold hover:bg-accent-hover transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md active:scale-[0.98] flex items-center gap-2"
-        >
-          {editing ? <><Save className="w-4 h-4" /> Save changes</> : <><Edit3 className="w-4 h-4" /> Edit project</>}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-all duration-200"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete
+          </button>
+          <button
+            onClick={() => editing ? handleSaveProject() : setEditing(true)}
+            className="bg-accent text-accent-on rounded-xl px-4 py-2 text-sm font-semibold hover:bg-accent-hover transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md active:scale-[0.98] flex items-center gap-2"
+          >
+            {editing ? <><Save className="w-4 h-4" /> Save changes</> : <><Edit3 className="w-4 h-4" /> Edit project</>}
+          </button>
+        </div>
       </div>
 
       {error && <p className="text-sm text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-950/30 px-3 py-2 rounded-[--radius-sm] mb-4">{error}</p>}
@@ -348,6 +376,23 @@ export default function ManageProject({ project, applications, allSkills, curren
           )}
         </div>
       </div>
+
+      {showDeleteConfirm && (
+        <ConfirmDialog
+          title="Delete project?"
+          message={`This permanently removes "${project.title}" along with all of its applications, updates and team data. This cannot be undone.`}
+          confirmLabel="Delete project"
+          danger
+          loading={deleting}
+          onConfirm={handleDelete}
+          onClose={() => setShowDeleteConfirm(false)}
+        />
+      )}
+      {deleteError && (
+        <p className="fixed bottom-4 left-1/2 -translate-x-1/2 text-sm text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-950/80 px-4 py-2 rounded-xl shadow-lg">
+          {deleteError}
+        </p>
+      )}
     </div>
   )
 }

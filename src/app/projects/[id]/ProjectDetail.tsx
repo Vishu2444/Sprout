@@ -4,9 +4,10 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { Profile, Skill } from '@/lib/types'
+import type { Profile } from '@/lib/types'
 import { getStatusColor, timeAgo, getInitials } from '@/lib/utils'
-import { Sprout, Users, MessageSquare, Send, ArrowLeft, ExternalLink, Clock, Check, X } from 'lucide-react'
+import { Users, MessageSquare, Send, ArrowLeft, ExternalLink, Clock, Save, Edit3, Trash2 } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface ProjectData {
   id: string
@@ -54,10 +55,9 @@ interface Props {
   isMember: boolean
   userApplication: { id: string; status: string; skill_id: string } | null
   applications: AppData[]
-  allSkills: Skill[]
 }
 
-export default function ProjectDetail({ project, currentUser, isOwner, isMember, userApplication, applications, allSkills }: Props) {
+export default function ProjectDetail({ project, currentUser, isOwner, isMember, userApplication, applications }: Props) {
   const router = useRouter()
   const supabase = createClient()
   const [applySkill, setApplySkill] = useState('')
@@ -67,6 +67,48 @@ export default function ProjectDetail({ project, currentUser, isOwner, isMember,
   const [postingUpdate, setPostingUpdate] = useState(false)
   const [error, setError] = useState('')
   const [showApply, setShowApply] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(project.title)
+  const [editTagline, setEditTagline] = useState(project.tagline || '')
+  const [editDescription, setEditDescription] = useState(project.description)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+
+  const handleEditSave = async () => {
+    setError('')
+    const { error: updateError } = await supabase
+      .from('projects')
+      .update({
+        title: editTitle,
+        tagline: editTagline || null,
+        description: editDescription,
+      })
+      .eq('id', project.id)
+
+    if (updateError) {
+      setError(updateError.message)
+      return
+    }
+    setEditing(false)
+    router.refresh()
+  }
+
+  const handleDelete = async () => {
+    if (deleting) return
+    setDeleting(true)
+    setDeleteError('')
+    const { error: deleteErr } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', project.id)
+    if (deleteErr) {
+      setDeleteError(deleteErr.message)
+      setDeleting(false)
+      return
+    }
+    router.push('/projects')
+  }
 
   const handleApply = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -104,9 +146,6 @@ export default function ProjectDetail({ project, currentUser, isOwner, isMember,
   }
 
   const filledSkills = project.skills_needed?.filter((s) => s.skill) || []
-  const appliedSkillIds = new Set(
-    applications.filter((a) => a.status === 'accepted' || a.status === 'pending').map((a) => a.skill_id)
-  )
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
@@ -135,6 +174,55 @@ export default function ProjectDetail({ project, currentUser, isOwner, isMember,
             </div>
             <h1 className="text-heading mb-1">{project.title}</h1>
             {project.tagline && <p className="text-sm text-secondary">{project.tagline}</p>}
+            {isOwner && !editing && (
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={() => { setEditTitle(project.title); setEditTagline(project.tagline || ''); setEditDescription(project.description); setEditing(true) }}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:text-accent-hover transition-colors"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Edit details
+                </button>
+                <span className="text-xs text-muted">•</span>
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-700 dark:text-red-400 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete project
+                </button>
+              </div>
+            )}
+            {editing && (
+              <div className="mt-4 p-4 bg-surface-alt rounded-xl border border-border space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1">Title</label>
+                  <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm text-primary bg-surface focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1">Tagline</label>
+                  <input type="text" value={editTagline} onChange={(e) => setEditTagline(e.target.value)}
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm text-primary bg-surface focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1">Description</label>
+                  <textarea rows={4} value={editDescription} onChange={(e) => setEditDescription(e.target.value)}
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm text-primary bg-surface focus:outline-none focus:ring-2 focus:ring-accent/30 resize-y" />
+                </div>
+                {error && <p className="text-xs text-red-600">{error}</p>}
+                <div className="flex gap-2">
+                  <button onClick={handleEditSave}
+                    className="inline-flex items-center gap-1 bg-accent text-accent-on rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-accent-hover transition-colors">
+                    <Save className="w-3 h-3" /> Save
+                  </button>
+                  <button onClick={() => setEditing(false)}
+                    className="text-xs text-secondary hover:text-primary transition-colors px-3 py-1.5">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-3 mt-4 pt-4 border-t border-border">
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sprout-500 to-sprout-600 flex items-center justify-center shadow-sm">
                 <span className="text-xs font-bold text-white">
@@ -232,7 +320,6 @@ export default function ProjectDetail({ project, currentUser, isOwner, isMember,
                   const accepted = applications.filter(
                     (a) => a.skill_id === s.skill_id && a.status === 'accepted'
                   ).length
-                  const remaining = s.slots_open - accepted
                   return (
                     <div key={s.skill_id} className="flex items-center justify-between">
                       <span className="text-sm font-semibold text-primary">{s.skill!.name}</span>
@@ -365,6 +452,23 @@ export default function ProjectDetail({ project, currentUser, isOwner, isMember,
             </form>
           </div>
         </div>
+      )}
+
+      {showDeleteConfirm && (
+        <ConfirmDialog
+          title="Delete project?"
+          message={`This permanently removes "${project.title}" along with all of its applications, updates and team data. This cannot be undone.`}
+          confirmLabel="Delete project"
+          danger
+          loading={deleting}
+          onConfirm={handleDelete}
+          onClose={() => setShowDeleteConfirm(false)}
+        />
+      )}
+      {deleteError && (
+        <p className="fixed bottom-4 left-1/2 -translate-x-1/2 text-sm text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-950/80 px-4 py-2 rounded-xl shadow-lg">
+          {deleteError}
+        </p>
       )}
     </div>
   )
