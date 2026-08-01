@@ -231,78 +231,96 @@ drop policy if exists "Users can upsert their own public key" on user_keys;
 create policy "Users can upsert their own public key"
   on user_keys for all using (auth.uid() = user_id);
 
--- 11. Conversations (table only — policies added after conversation_participants exists)
+-- 11. Conversations (direct one-to-one; user_a / user_b order enforced by unique index)
 create table if not exists conversations (
-  id uuid primary key default gen_random_uuid(),
-  created_at timestamptz default now(),
-  last_message_at timestamptz default now()
-);
-
--- 12. Conversation participants
-create table if not exists conversation_participants (
-  conversation_id uuid references conversations(id) on delete cascade,
-  user_id uuid references profiles(id) on delete cascade,
-  joined_at timestamptz default now(),
-  primary key (conversation_id, user_id)
-);
-
--- 13. Messages
-create table if not exists messages (
-  id uuid primary key default gen_random_uuid(),
-  conversation_id uuid references conversations(id) on delete cascade not null,
-  sender_id uuid references profiles(id) on delete cascade not null,
-  encrypted_content text not null,
-  iv text not null,
+  id         uuid primary key default gen_random_uuid(),
+  user_a     uuid not null references auth.users(id) on delete cascade,
+  user_b     uuid not null references auth.users(id) on delete cascade,
   created_at timestamptz default now()
 );
 
--- RLS and policies for conversations
+create unique index if not exists idx_conversations_pair
+  on conversations (least(user_a, user_b), greatest(user_a, user_b));
+
 alter table conversations enable row level security;
 
 drop policy if exists "Participants can view conversations" on conversations;
 create policy "Participants can view conversations"
   on conversations for select using (
-    exists (select 1 from conversation_participants where conversation_id = id and user_id = auth.uid())
+    auth.uid() in (user_a, user_b)
   );
 
 drop policy if exists "Participants can insert conversations" on conversations;
 create policy "Participants can insert conversations"
   on conversations for insert with check (
-    exists (select 1 from conversation_participants where conversation_id = id and user_id = auth.uid())
+    auth.uid() in (user_a, user_b)
   );
 
--- RLS and policies for conversation_participants
-alter table conversation_participants enable row level security;
+-- 12. Messages (E2EE: ciphertext for the recipient, ciphertext_self for the sender's own history)
+create table if not exists messages (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references conversations(id) on delete cascade,
+  sender_id       uuid not null references auth.users(id) on delete cascade,
+  ciphertext      text not null,
+  iv              text not null,
+  ciphertext_self text,
+  iv_self         text,
+  created_at      timestamptz default now(),
+  read_at         timestamptz
+);
 
-drop policy if exists "Participants can view participants" on conversation_participants;
-create policy "Participants can view participants"
-  on conversation_participants for select using (
-    exists (select 1 from conversation_participants cp where cp.conversation_id = conversation_id and cp.user_id = auth.uid())
-  );
-
-drop policy if exists "Users can insert themselves" on conversation_participants;
-create policy "Users can insert themselves"
-  on conversation_participants for insert with check (user_id = auth.uid());
-
--- RLS and policies for messages
 alter table messages enable row level security;
 
 drop policy if exists "Participants can view messages" on messages;
 create policy "Participants can view messages"
   on messages for select using (
-    exists (select 1 from conversation_participants where conversation_id = messages.conversation_id and user_id = auth.uid())
+    exists (
+      select 1 from conversations
+      where id = messages.conversation_id
+        and auth.uid() in (user_a, user_b)
+    )
   );
 
 drop policy if exists "Participants can insert messages" on messages;
 create policy "Participants can insert messages"
   on messages for insert with check (
     sender_id = auth.uid()
-    and exists (select 1 from conversation_participants where conversation_id = messages.conversation_id and user_id = auth.uid())
+    and exists (
+      select 1 from conversations
+      where id = messages.conversation_id
+        and auth.uid() in (user_a, user_b)
+    )
   );
 
--- Enable Realtime for messages table
--- Run this separately in Supabase dashboard: 
--- ALTER PUBLICATION supabase_realtime ADD TABLE messages;
+drop policy if exists "Participants can mark messages read" on messages;
+create policy "Participants can mark messages read"
+  on messages for update using (
+    exists (
+      select 1 from conversations
+      where id = messages.conversation_id
+        and auth.uid() in (user_a, user_b)
+    )
+  );
+
+-- 13. Enable Realtime for messages table (required for live chat)
+alter publication supabase_realtime add table messages;
+
+-- 14. E2EE key backups (passphrase-wrapped private key for multi-device recovery)
+create table if not exists key_backups (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  wrapped_private_key text not null,
+  salt text not null,
+  iv text not null,
+  iterations int not null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table key_backups enable row level security;
+
+drop policy if exists "Users can manage their own key backup" on key_backups;
+create policy "Users can manage their own key backup"
+  on key_backups for all using (auth.uid() = user_id);
 
 -- Seed skills (skip if already exist)
 insert into skills (name, category)
